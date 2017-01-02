@@ -19,7 +19,6 @@ Optional:
 
 import feedparser
 import stripogram
-
 import logging
 import optparse
 import os
@@ -48,21 +47,13 @@ def conf_dir():
         return os.getenv('GRAB_RSS_DIR')
     return os.path.join(os.getenv('HOME'), '.grab_rss')
 
-def feedlist():
-    feed_file = os.path.join(conf_dir(), 'feeds.txt')
-
-    try:
-        feeds = [s.strip() for s in open(feed_file).readlines() if not s.startswith('#')]
-        logging.info('Read %d feeds from %s' % (len(feeds), feed_file))
-        return feeds
-    except IOError:
-        raise Exception('No feeds found in %s' % (feed_file))
-
 def read_config():
     config = ConfigParser.RawConfigParser(
         {
             'from': 'grab-rss@localhost',
             'smtp_host': 'localhost',
+            'smtp_port': '25',
+            'smtp_auth': 'none',
             'socket_timeout': '30',
             'user_agent': 'grab_rss ' + __version__ + ' ' + __url__,
             'pool_size': 0
@@ -76,6 +67,26 @@ def read_config():
         pass
 
     return config
+
+class feed_item:
+    def __init__(self, filename):
+        self.db = sqlite3.connect(filename)
+        self.cursor = self.db.cursor()
+        self.cursor.execute('create table if not exists feeds (id integer primary key, url text unique, email text)')
+
+    def save(self):
+        self.db.commit()
+
+    def emails(self, feed):
+        self.cursor.execute("select email from feeds where url = ?", (feed,))
+        there = self.cursor.fetchone()
+        result = list(there)
+        return result
+
+    def get(self):
+        self.cursor.execute('select url from feeds')
+        result = list(self.cursor.fetchall())
+        return result
 
 class seen_items:
     def __init__(self, filename):
@@ -144,35 +155,37 @@ def parse_feed(url):
         try:
             return feed['feed']['title']
         except:
-            return feed_url.split('/')[3]
+            s = feed_url[0]
+            return s.split('/')[3]
 
     # Don't return feed directly, PyCObjects are unpicklable and this
     # makes multiprocessing very unhappy
-    feed = feedparser.parse(url)
-
+    clean_url = url[0]
+    feed = feedparser.parse(clean_url)
     name = feed_name(feed, url)
-
     return (url, name, feed.entries)
 
 def pool_map(pool_size, func, args):
     if pool_size > 0:
         import multiprocessing
         pool = multiprocessing.Pool(pool_size)
+        logging.debug('pool_map')
         return pool.map(func, args)
     else:
         return map(func, args)
 
+fstate = feed_item(os.path.join(conf_dir(), 'seen.db'))
+
 def grab_feeds(state, pool_size):
-
-    all_feeds = pool_map(pool_size, parse_feed, feedlist())
-
+    feeds = fstate.get()
+    all_feeds = pool_map(pool_size, parse_feed, feeds)
     for (feed_url, feed_title, feed) in all_feeds:
         num_entries = len(feed)
-
+        clean_feed_url = feed_url[0]
         if num_entries:
-            logging.debug('Found %d entries in %s' % (num_entries, feed_url))
+            logging.debug('Found %d entries in %s' % (num_entries, clean_feed_url))
         else:
-            logging.info('Found no entries in %s' % (feed_url))
+            logging.info('Found no entries in %s' % (clean_feed_url))
 
         new_entries = 0
 
@@ -185,7 +198,7 @@ def grab_feeds(state, pool_size):
             title = entry.get('title', link)
 
             msg = MIMEText(body_for(entry))
-            msg['X-GrabRSS-Feed'] = feed_url
+            msg['X-GrabRSS-Feed'] = clean_feed_url
             msg['Subject'] = force_to_ascii('%s - %s' % (feed_title, title))
             yield msg
 
@@ -240,10 +253,13 @@ def main(argv = None):
     pool_size = int(options.pool_size or config.get('GrabRSS', 'pool_size'))
 
     smtp_host = config.get('GrabRSS', 'smtp_host')
+    smtp_port = config.getint('GrabRSS', 'smtp_port')
+    smtp_protocol = config.get('GrabRSS', 'smtp_protocol')
 
-    logging.debug('Sending mail to %s' % (smtp_host))
+    logging.debug('SMTP connection opened to %s' % (smtp_host))
 
     state = seen_items(os.path.join(conf_dir(), 'seen.db'))
+    smtp_auth = config.get('GrabRSS', 'smtp_auth')
 
     if options.remove_older_than:
         removed = state.remove_older_than(options.remove_older_than)
@@ -251,13 +267,23 @@ def main(argv = None):
         state.save()
         return
 
-    smtp = smtplib.SMTP(smtp_host)
+    smtp = smtplib.SMTP(smtp_host,smtp_port)
+
+    if smtp_protocol == "tls":
+        smtp.ehlo()
+        smtp.starttls()
+
+    if smtp_auth:
+        smtp_user = config.get('GrabRSS', 'smtp_user')
+        smtp_pass = config.get('GrabRSS', 'smtp_pass')
+
+        smtp.login(smtp_user, smtp_pass)
 
     for email in grab_feeds(state, pool_size):
         if not options.dont_send:
             email['From'] = config.get('GrabRSS', 'from')
-            email['To'] = config.get('GrabRSS', 'to')
-            smtp.sendmail(email['From'], [email['To']], email.as_string())
+            email['To'] = ", ".join(fstate.emails(email['X-GrabRSS-Feed']))
+            smtp.sendmail(email['From'], email['To'].split(','), email.as_string())
 
     state.save()
 
