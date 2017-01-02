@@ -1,4 +1,20 @@
 
+# Update 2017-01-02
+
+So I'm new to python but I needed something and this met the requirements mostly.
+I've made some modifications to this so that it now stores the feed list in seen.db
+along with the associated emails they should go to.
+
+So bob.com/feed can go to bob@gmail.com and sam.com/feed can go to bob@email.com,sam@email.com
+
+As per the above I'm new to python and as such this probably isn't the best code ever, but it was a learning experience.
+#ToDo
+Create some sort of argument that allows you to manage feeds and emails for those feeds
+tidy up the documentation
+probably tidyup the code a bit more once I understand this whole tuple thing.
+
+##########
+
 grab_rss is a simple RSS to email gateway; it downloads feeds (RSS,
 Atom, or anything else Universal Feed Parser understands), formats
 them into plaintext emails, and sends them to you. The idea would be
