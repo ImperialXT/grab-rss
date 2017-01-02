@@ -3,7 +3,7 @@
 __copyright__ = 'Copyright 2010, 2012 Jack Lloyd'
 __license__   = 'GPLv2'
 __author__    = 'Jack Lloyd'
-__version__   = '0.3'
+__version__   = '0.4'
 __email__     = 'lloyd@randombit.net'
 __url__       = 'https://github.com/randombit/grab-rss'
 
